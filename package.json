@@ -2,7 +2,7 @@
   "name": "makoedit",
   "version": "1.0.0",
   "description": "Client-safe content editing for Mako Logics fleet sites. Clients edit text, images and links; Mako owns structure and SEO.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": false,
   "type": "module",
   "main": "./dist/index.js",
@@ -46,5 +46,18 @@
     "react": {
       "optional": true
     }
-  }
+  },
+  "author": "Mako Logics LLC",
+  "keywords": [
+    "cms",
+    "nextjs",
+    "content",
+    "inline-editing",
+    "visual-editing",
+    "draft-publish"
+  ],
+  "bugs": {
+    "url": "https://github.com/MakoBytes-com/makoedit/issues"
+  },
+  "homepage": "https://github.com/MakoBytes-com/makoedit#readme"
 }
