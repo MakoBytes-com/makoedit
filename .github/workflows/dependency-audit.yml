@@ -1,0 +1,121 @@
+name: Dependency audit
+
+# Reports `npm audit` to the Mako portal, split production vs full scope.
+#
+# WHY: the portal reads GitHub's Dependabot alerts, which never see dev-only
+# transitive findings — that is how a real advisory sat unseen on a repo
+# showing "0 alerts". The portal has no checkout and cannot run npm audit
+# itself, so the repo runs it and reports in.
+#
+# The split matters: a production finding is exposure, a dev-only finding is
+# hygiene. Reporting one number for both is how the real one gets ignored.
+
+on:
+  schedule:
+    - cron: "20 6 * * 1" # Mondays, before the fleet's working week
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # No `npm ci` on purpose: `npm audit` reads the lockfile, and a repo
+      # whose install is broken is exactly the one whose audit must still be
+      # reported rather than skipped.
+      - name: Audit production scope
+        id: prod
+        run: |
+          npm audit --omit=dev --json > prod.json 2>/dev/null || true
+          echo "ok=$( [ -s prod.json ] && echo yes || echo no )" >> "$GITHUB_OUTPUT"
+
+      - name: Audit full scope
+        run: npm audit --json > dev.json 2>/dev/null || true
+
+      - name: Report to the portal
+        env:
+          PORTAL_URL: https://portal.makoai.studio
+          PORTAL_INGEST_SECRET: ${{ secrets.PORTAL_INGEST_SECRET }}
+        run: |
+          if [ -z "$PORTAL_INGEST_SECRET" ]; then
+            echo "PORTAL_INGEST_SECRET not set — skipping report."
+            exit 0
+          fi
+          node -e '
+            const fs = require("fs");
+            const read = (f) => {
+              try { return JSON.parse(fs.readFileSync(f, "utf8")); }
+              catch { return null; }
+            };
+            const sev = (j) => {
+              const v = j && j.metadata && j.metadata.vulnerabilities;
+              return v
+                ? { critical: v.critical|0, high: v.high|0, moderate: v.moderate|0, low: v.low|0 }
+                : null;
+            };
+            const prodJson = read("prod.json");
+            const devJson = read("dev.json");
+            const prod = sev(prodJson);
+            const dev = sev(devJson);
+
+            // Advisories the repo has deliberately parked. dependabot.yml
+            // carries the reason beside each ignore, so a known-and-accepted
+            // finding is reported as parked rather than as a new problem.
+            let parked = [];
+            try {
+              const yml = fs.readFileSync(".github/dependabot.yml", "utf8");
+              parked = [...yml.matchAll(/dependency-name:\s*"?([^"\n]+)"?/g)]
+                .map((m) => ({ package: m[1].trim(), reason: "ignored in dependabot.yml" }));
+            } catch {}
+
+            const findings = [];
+            const vulns = (devJson && devJson.vulnerabilities) || {};
+            for (const [name, v] of Object.entries(vulns)) {
+              if (v && (v.severity === "critical" || v.severity === "high")) {
+                findings.push({
+                  package: name,
+                  severity: v.severity,
+                  via: Array.isArray(v.via)
+                    ? v.via.map((x) => (typeof x === "string" ? x : x.title)).filter(Boolean).join("; ").slice(0, 300)
+                    : "",
+                });
+              }
+            }
+
+            const body = {
+              repo: process.env.GITHUB_REPOSITORY,
+              ref: process.env.GITHUB_REF_NAME,
+              commit_sha: process.env.GITHUB_SHA,
+              prod: prod || undefined,
+              dev: dev || undefined,
+              parked,
+              top_findings: findings,
+              // UNKNOWN IS NOT ZERO. If npm audit could not produce a
+              // report, say so — never let a failed audit read as a clean one.
+              audit_error: (!prod || !dev)
+                ? "npm audit did not produce a parseable report (missing or broken lockfile?)"
+                : undefined,
+            };
+
+            fetch(process.env.PORTAL_URL + "/api/master/audit", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: "Bearer " + process.env.PORTAL_INGEST_SECRET,
+              },
+              body: JSON.stringify(body),
+            })
+              .then(async (r) => {
+                console.log("portal responded", r.status, await r.text());
+                if (!r.ok) process.exit(1);
+              })
+              .catch((e) => { console.error(e); process.exit(1); });
+          '
