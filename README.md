@@ -203,3 +203,25 @@ design — that constraint is what keeps bespoke client portals safe.
 - **Audit trail** of who changed what, when.
 - **Image constraints** enforced on upload: dimensions, aspect ratio, max size,
   AVIF/WebP conversion, and preserved width/height so CLS does not regress.
+
+---
+
+## Contributing
+
+MIT licensed — see [LICENSE](LICENSE). Issues and pull requests welcome.
+
+MakoEdit is extracted from production sites, so two things are load-bearing and
+a PR that changes them needs a strong argument:
+
+1. **A site with no rows must render exactly as it did before.** Every field
+   carries the page's current hardcoded value as its default, and an
+   unreachable database serves defaults rather than erroring. This is what
+   makes it safe to install on a live client site.
+2. **Clients edit values, never structure.** No page builder, no block
+   composition, no theme editing, no SEO fields. Scope creep here is how a
+   content editor becomes a way for a non-technical user to break a page.
+
+`npm test` builds the package and runs the smoke suite (in-memory store, no
+database needed). It covers draft isolation, publish, discard, marker
+round-tripping, maxLength enforcement, unknown-field rejection, and the
+database-down fallback. Keep it passing.
