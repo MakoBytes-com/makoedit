@@ -21,17 +21,37 @@ type DrizzleLike = {
   delete: (t: unknown) => { where: (w: unknown) => Promise<unknown> };
 };
 
+/**
+ * The public option types are deliberately loose.
+ *
+ * A real `PostgresJsDatabase` does NOT structurally satisfy `DrizzleLike`:
+ * drizzle's `.from()` is generic and constrained to `PgTable | Subquery |
+ * PgViewBase | SQL`, so under `strictFunctionTypes` it is not assignable to
+ * `(t: unknown) => ...`. Likewise a `PgTableWithColumns` has no string index
+ * signature, so it is not a `Record<string, unknown>`, and drizzle's `eq` has
+ * narrower parameters than `(col: unknown, value: unknown)`.
+ *
+ * Every one of those is a variance complaint about types that work perfectly
+ * at runtime — the adapter only ever duck-types. Accepting `unknown` at the
+ * boundary and narrowing inside means the documented usage in the README
+ * actually compiles, which it did not before (found on first adoption,
+ * bulldogsecurityservice.com, 2026-07-28).
+ */
 export type DrizzleAdapterOptions = {
-  db: DrizzleLike;
+  /** Your drizzle db instance. */
+  db: unknown;
   /** The content_fields table object from your schema. */
-  table: Record<string, unknown>;
+  table: unknown;
   /** drizzle-orm's `eq`. Passed in so this package never has to pin a
    *  drizzle-orm version against the site's. */
-  eq: (col: unknown, value: unknown) => unknown;
+  eq: (col: never, value: never) => unknown;
 };
 
-export function drizzleStore({ db, table, eq }: DrizzleAdapterOptions): ContentStore {
-  const col = (name: string) => (table as Record<string, unknown>)[name];
+export function drizzleStore(options: DrizzleAdapterOptions): ContentStore {
+  const db = options.db as DrizzleLike;
+  const table = options.table as Record<string, unknown>;
+  const eq = options.eq as (col: unknown, value: unknown) => unknown;
+  const col = (name: string) => table[name];
 
   return {
     async listRows(page: string): Promise<ContentRow[]> {
