@@ -1,6 +1,6 @@
 {
   "name": "makoedit",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Client-safe content editing for Mako Logics fleet sites. Clients edit text, images and links; Mako owns structure and SEO.",
   "license": "MIT",
   "private": false,
@@ -26,6 +26,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepack": "npm run build",
+    "prepare": "npm run build",
     "test": "npm run build && node ./smoke.test.mjs"
   },
   "repository": {
