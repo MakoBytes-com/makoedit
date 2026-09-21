@@ -1,0 +1,60 @@
+name: gitleaks
+
+# Secret scanning via the upstream gitleaks binary (MIT-licensed, free).
+#
+# NOT gitleaks/gitleaks-action@v2 - that wrapper is paywalled for ORG-OWNED
+# repos, so on a MakoBytes-com repo it cannot actually scan. Running the CLI
+# directly gives the same rules with no license gate.
+#
+# Added 2026-09-21. This repo was missed by the 2026-07-28 fleet rollout and
+# had no secret scanning of any kind. Its full history was scanned clean by
+# hand at the time this was added; this workflow keeps it that way.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly full-history sweep, Monday. Minute staggered per repo.
+    - cron: "6 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          VERSION="8.30.1"
+          TARBALL="gitleaks_${VERSION}_linux_x64.tar.gz"
+          BASE="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+          # --fail turns an HTTP error into a failed download instead of piping
+          # an HTML error page into tar, and --retry rides out a transient CDN
+          # blip. Without these a two-second network hiccup arrives looking
+          # exactly like a leaked-credential alert (MakoBot, 2026-09-21).
+          curl --fail --silent --show-error --location \
+               --retry 5 --retry-delay 3 --retry-all-errors \
+               -o "$TARBALL" "${BASE}/${TARBALL}"
+          curl --fail --silent --show-error --location \
+               --retry 5 --retry-delay 3 --retry-all-errors \
+               -o checksums.txt "${BASE}/gitleaks_${VERSION}_checksums.txt"
+          # Verify the binary is the one upstream published.
+          grep " ${TARBALL}$" checksums.txt | sha256sum -c -
+          tar -xzf "$TARBALL" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          rm -f "$TARBALL" checksums.txt
+          gitleaks version
+
+      - name: Scan repo history
+        # --exit-code 1 so a finding FAILS the run. A scanner that reports a
+        # leak and exits 0 is worse than no scanner.
+        run: gitleaks detect --source . --verbose --redact --exit-code 1
