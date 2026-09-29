@@ -83,8 +83,12 @@ jobs:
             let parked = [];
             try {
               const yml = fs.readFileSync(".github/dependabot.yml", "utf8");
-              parked = [...yml.matchAll(/dependency-name:\s*"?([^"\n]+)"?/g)]
-                .map((m) => ({ package: m[1].trim(), reason: "ignored in dependabot.yml" }));
+              // Real ignore entries only, never comment lines: a comment
+              // mentioning dependency-name was being reported as a package.
+              const names = [...yml.matchAll(/^[ \t]*-?[ \t]*dependency-name:[ \t]*"?([^"\s#]+)/gm)]
+                .map((m) => m[1]);
+              parked = [...new Set(names)]
+                .map((name) => ({ package: name, reason: "ignored in dependabot.yml" }));
             } catch {}
 
             const findings = [];
