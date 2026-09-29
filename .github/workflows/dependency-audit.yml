@@ -14,7 +14,8 @@ name: Dependency audit
 # /api/master/audit, so every report was redirected to its sign-in page,
 # which answers 200 — 25 repos ran green for five weeks while reporting
 # nothing. Three things now make that impossible to miss:
-#  1. The report refuses redirects and anything but a JSON 2xx.
+#  1. The report refuses redirects, and only the portal's own JSON receipt
+#     ({ ok: true }) counts as delivered.
 #  2. A missing PORTAL_INGEST_SECRET fails the run instead of skipping.
 #  3. The last step fails on any high or critical finding, so the audit is a
 #     signal on its own (GitHub emails a failed scheduled run) rather than
@@ -129,9 +130,12 @@ jobs:
               .then(async (r) => {
                 const text = await r.text();
                 console.log("portal responded", r.status, text.slice(0, 500));
-                const json = (r.headers.get("content-type") || "").includes("application/json");
-                if (!r.ok || !json) {
-                  console.error("Report NOT accepted: expected a JSON 2xx from the portal.");
+                // Only the collector's own receipt ({ ok: true }) counts —
+                // not a page that merely loaded, and not some other JSON.
+                let receipt = null;
+                try { receipt = JSON.parse(text); } catch {}
+                if (!r.ok || !receipt || receipt.ok !== true) {
+                  console.error("::error::The portal did not confirm the audit report, so nobody has it.");
                   process.exit(1);
                 }
               })
