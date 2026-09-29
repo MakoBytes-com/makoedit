@@ -1,0 +1,96 @@
+name: CI
+
+# Lints, typechecks and (where possible) builds on every PR and push.
+#
+# WHY THIS EXISTS (added 2026-07-27): the fleet had gitleaks, uptime checks, a
+# duty officer and Dependabot auto-merge — but nothing that ever compiled or
+# linted the code. "All checks passed" meant only "no secrets were committed",
+# so auto-merge had nothing meaningful to gate on. 30 Dependabot PRs piled up
+# across 11 repos, and turning this on immediately surfaced a crashed linter in
+# four repos, a lockfile that made `npm ci` impossible in another, and a lint
+# script that had been dead since the Next 16 upgrade.
+#
+# DIVISION OF LABOUR with Vercel. Vercel already builds every PR as a preview,
+# WITH the production environment variables. What Vercel does not do is lint or
+# typecheck. So this workflow's real job is the half Vercel skips — and the two
+# together are the gate.
+#
+# Steps use --if-present because the fleet is not uniform: some repos have lint
+# and typecheck, some only one, some neither. A missing script is not a failure.
+# Typecheck falls back to `tsc --noEmit` when a repo has TypeScript but never
+# declared a script for it, so the check cannot be avoided by omission.
+
+on:
+  pull_request:
+  push:
+    # The fleet is not uniform: makochat.app still defaults to `master` while
+    # everything else uses `main`. Listing both means a repo's branch name can
+    # never silently switch CI off — which is exactly what happened when this
+    # workflow first shipped with `[main]` only and makochat never ran once.
+    branches: [main, master]
+
+# A newer push makes an in-flight run pointless — cancel it rather than pay for
+# it. Never cancels on the default branch, where the run is the record of what
+# actually shipped.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` rather than `npm install` on purpose: it fails loudly when the
+      # lockfile and package.json have drifted apart, which is how makobytes-com
+      # reached a state where no clean install could succeed at all.
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint --if-present
+
+      - name: Typecheck
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.typecheck ? 0 : 1)"; then
+            npm run typecheck
+          elif [ -f tsconfig.json ]; then
+            echo "No typecheck script; running tsc --noEmit directly."
+            npx --yes tsc --noEmit
+          else
+            echo "No TypeScript in this repo — nothing to typecheck."
+          fi
+
+      # Some sites prerender pages from their database at build time, so they
+      # genuinely cannot build without production credentials. Those repos carry
+      # a .github/ci-skip-build file explaining which value they need and why;
+      # Vercel's preview deploy is the build gate for them. Everything else must
+      # build here.
+      - name: Build
+        if: hashFiles('.github/ci-skip-build') == ''
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Note skipped build
+        if: hashFiles('.github/ci-skip-build') != ''
+        run: |
+          echo "Build skipped — this repo needs production data at build time."
+          echo "Reason on file:"
+          cat .github/ci-skip-build
+          echo "Vercel's preview deployment is the build check for this repo."
+
+      # makoedit is a library other sites install, so its smoke test (draft vs
+      # live, publish, discard, database down) is the part that matters most.
+      - name: Test
+        run: npm test --if-present
