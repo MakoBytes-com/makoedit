@@ -130,8 +130,9 @@ jobs:
               .then(async (r) => {
                 const text = await r.text();
                 console.log("portal responded", r.status, text.slice(0, 500));
-                // Only the collector's own receipt ({ ok: true }) counts —
-                // not a page that merely loaded, and not some other JSON.
+                // Only a receipt from the collector itself ({ ok: true })
+                // counts: not a page that merely loaded, not some other JSON.
+                // (No apostrophes in this script: it is single-quoted.)
                 let receipt = null;
                 try { receipt = JSON.parse(text); } catch {}
                 if (!r.ok || !receipt || receipt.ok !== true) {
