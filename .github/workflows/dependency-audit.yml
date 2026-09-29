@@ -9,6 +9,16 @@ name: Dependency audit
 #
 # The split matters: a production finding is exposure, a dev-only finding is
 # hygiene. Reporting one number for both is how the real one gets ignored.
+#
+# HARDENED 2026-09-28. The portal rebuilt on 2026-08-24 had no
+# /api/master/audit, so every report was redirected to its sign-in page,
+# which answers 200 — 25 repos ran green for five weeks while reporting
+# nothing. Three things now make that impossible to miss:
+#  1. The report refuses redirects and anything but a JSON 2xx.
+#  2. A missing PORTAL_INGEST_SECRET fails the run instead of skipping.
+#  3. The last step fails on any high or critical finding, so the audit is a
+#     signal on its own (GitHub emails a failed scheduled run) rather than
+#     depending entirely on the portal to notice.
 
 on:
   schedule:
@@ -24,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -46,8 +56,8 @@ jobs:
           PORTAL_INGEST_SECRET: ${{ secrets.PORTAL_INGEST_SECRET }}
         run: |
           if [ -z "$PORTAL_INGEST_SECRET" ]; then
-            echo "PORTAL_INGEST_SECRET not set — skipping report."
-            exit 0
+            echo "::error::PORTAL_INGEST_SECRET is not set, so this audit cannot reach the portal. Set it from MASTER_INGEST_SECRET in makoai-portal/.env.local."
+            exit 1
           fi
           node -e '
             const fs = require("fs");
@@ -112,10 +122,23 @@ jobs:
                 authorization: "Bearer " + process.env.PORTAL_INGEST_SECRET,
               },
               body: JSON.stringify(body),
+              // A redirect means the route is gone or auth bounced us to the
+              // sign-in page. Following it turns that into a fake 200.
+              redirect: "manual",
             })
               .then(async (r) => {
-                console.log("portal responded", r.status, await r.text());
-                if (!r.ok) process.exit(1);
+                const text = await r.text();
+                console.log("portal responded", r.status, text.slice(0, 500));
+                const json = (r.headers.get("content-type") || "").includes("application/json");
+                if (!r.ok || !json) {
+                  console.error("Report NOT accepted: expected a JSON 2xx from the portal.");
+                  process.exit(1);
+                }
               })
               .catch((e) => { console.error(e); process.exit(1); });
           '
+
+      # The audit's own verdict, independent of whether the portal heard it.
+      - name: Fail on high or critical
+        if: always()
+        run: npm audit --audit-level=high
